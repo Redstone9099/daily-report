@@ -1,200 +1,211 @@
 import { useState } from 'react'
-import { Sparkles } from 'lucide-react'
-import type { JobType, ReportStyle, ReportType } from '../lib/generateReport'
+import { generateReportStream, typeMap } from '../lib/generateReport'
+import type { ReportType, JobRole, ReportStyle } from '../lib/generateReport'
+import { saveReport } from '../lib/storage'
 
 interface Props {
-  onGenerate: (data: {
-    content: string
-    jobType: JobType
-    style: ReportStyle
-    reportType: ReportType
-  }) => void
-  isLoading: boolean
-  remainingCount: number
-  isPro: boolean
+  onStreamChunk: (chunk: string) => void
+  onStreamDone: (fullReport: string) => void
+  isGenerating: boolean
+  setIsGenerating: (v: boolean) => void
 }
 
-const JOB_OPTIONS: { value: JobType; label: string; emoji: string }[] = [
-  { value: 'dev', label: '研发 / 工程师', emoji: '💻' },
-  { value: 'ops', label: '运营', emoji: '📊' },
-  { value: 'sales', label: '销售', emoji: '💼' },
-  { value: 'design', label: '设计师', emoji: '🎨' },
-  { value: 'management', label: '管理 / PM', emoji: '🗂️' },
-  { value: 'other', label: '其他职位', emoji: '✨' },
+const FREE_LIMIT = 3
+
+const reportTypes: { id: ReportType; label: string; icon: string }[] = [
+  { id: 'daily',   label: '日报',   icon: '📅' },
+  { id: 'weekly',  label: '周报',   icon: '📆' },
+  { id: 'monthly', label: '月报',   icon: '📊' },
+  { id: 'review',  label: '述职',   icon: '🏆' },
+  { id: 'leave',   label: '请假条', icon: '🌴' },
+  { id: 'email',   label: '邮件',   icon: '✉️' },
 ]
 
-const STYLE_OPTIONS: { value: ReportStyle; label: string; desc: string }[] = [
-  { value: 'simple', label: '简洁版', desc: '两个模块，干净利落' },
-  { value: 'formal', label: '正式版', desc: '四个模块，规范专业' },
-  { value: 'kpi', label: 'KPI导向', desc: '数据量化，突出成果' },
+const roles: { id: JobRole; label: string; icon: string }[] = [
+  { id: 'dev',    label: '研发',   icon: '💻' },
+  { id: 'ops',    label: '运营',   icon: '📊' },
+  { id: 'sales',  label: '销售',   icon: '🛒' },
+  { id: 'design', label: '设计',   icon: '🎨' },
+  { id: 'pm',     label: 'PM',     icon: '📌' },
+  { id: 'other',  label: '其他',   icon: '✨' },
 ]
 
-const REPORT_TYPE_OPTIONS: { value: ReportType; label: string; emoji: string }[] = [
-  { value: 'daily', label: '日报', emoji: '📅' },
-  { value: 'weekly', label: '周报', emoji: '📆' },
+const styles: { id: ReportStyle; label: string; desc: string }[] = [
+  { id: 'simple', label: '简洁版', desc: '两模块，干净利落' },
+  { id: 'formal', label: '正式版', desc: '四模块，规范专业' },
+  { id: 'kpi',    label: 'KPI版',  desc: '数据量化，突出成果' },
 ]
 
-const PLACEHOLDERS: Record<JobType, string> = {
-  dev: '例如：修了登录页面的bug，review了小李的代码，下午开了个技术评审会，讨论新模块的架构方案……',
-  ops: '例如：今天发了3条推文，用户增长200，跑了个活动数据报表，和设计师对了下周活动页面的需求……',
-  sales: '例如：拜访了XX客户，聊了合作意向，跟进了3个老客户续约，发了5份报价单，今日新签1单……',
-  design: '例如：完成了首页改版3个方案，和产品开了评审会，确定了方案2，下午出了Banner的三稿……',
-  management: '例如：上午主持了周会，下午和技术讨论了Q2规划，处理了几个跨部门协调的事项……',
-  other: '把今天做的事情随便写下来，口语化没关系，AI会帮你整理成规范日报……',
+const needsStyle: ReportType[] = ['daily', 'weekly', 'monthly']
+
+const placeholders: Record<ReportType, string> = {
+  daily:   '例如：修了登录页的bug，review了小李的代码，下午开了技术评审会讨论新模块架构……',
+  weekly:  '例如：这周完成了支付模块的开发，修了三个线上bug，周五参加了季度规划会……',
+  monthly: '例如：本月负责了新版本上线，带了两个实习生，完成了Q3 OKR的80%……',
+  review:  '例如：过去半年主导了三个项目，从零搭建了监控体系，团队从5人扩到10人……',
+  leave:   '例如：我明天要请一天假，家里有点事，工作已经交接给小王了……',
+  email:   '例如：要给客户发邮件说项目延期了一周，原因是需求变更，请他们谅解……',
 }
 
-export function ReportForm({ onGenerate, isLoading, remainingCount, isPro }: Props) {
-  const [content, setContent] = useState('')
-  const [jobType, setJobType] = useState<JobType>('dev')
-  const [style, setStyle] = useState<ReportStyle>('formal')
+export default function ReportForm({
+  onStreamChunk,
+  onStreamDone,
+  isGenerating,
+  setIsGenerating,
+}: Props) {
   const [reportType, setReportType] = useState<ReportType>('daily')
+  const [role, setRole] = useState<JobRole>('dev')
+  const [content, setContent] = useState('')
+  const [style, setStyle] = useState<ReportStyle>('formal')
+  const [usedCount, setUsedCount] = useState(() =>
+    parseInt(localStorage.getItem('usedCount') || '0')
+  )
 
-  const canSubmit = content.trim().length >= 10 && (isPro || remainingCount > 0) && !isLoading
+  const showStyle = needsStyle.includes(reportType)
+  const remaining = FREE_LIMIT - usedCount
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!canSubmit) return
-    onGenerate({ content: content.trim(), jobType, style, reportType })
+  const handleGenerate = async () => {
+    if (!content.trim() || isGenerating) return
+    if (usedCount >= FREE_LIMIT) {
+      alert('免费次数已用完，请升级 Pro 版本')
+      return
+    }
+
+    setIsGenerating(true)
+    let fullReport = ''
+
+    try {
+      await generateReportStream(
+        { role, content, style, reportType },
+        chunk => {
+          fullReport += chunk
+          onStreamChunk(chunk)
+        }
+      )
+      const newCount = usedCount + 1
+      setUsedCount(newCount)
+      localStorage.setItem('usedCount', String(newCount))
+      saveReport({ role, content, style, reportType, result: fullReport })
+      onStreamDone(fullReport)
+    } catch {
+      alert('生成失败，请稍后重试')
+    } finally {
+      setIsGenerating(false)
+    }
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-
-      {/* 日报 / 周报 切换 */}
+    <div className="space-y-5">
+      {/* 文档类型 */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">报告类型</label>
-        <div className="flex gap-3">
-          {REPORT_TYPE_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => setReportType(opt.value)}
-              className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 text-sm font-medium transition-all ${
-                reportType === opt.value
-                  ? 'border-violet-500 bg-violet-50 text-violet-700'
-                  : 'border-gray-200 text-gray-500 hover:border-gray-300'
-              }`}
-            >
-              <span>{opt.emoji}</span>
-              <span>{opt.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* 职位类型 */}
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">你的岗位</label>
+        <label className="block text-white/60 text-xs font-medium mb-2 uppercase tracking-wide">文档类型</label>
         <div className="grid grid-cols-3 gap-2">
-          {JOB_OPTIONS.map((opt) => (
+          {reportTypes.map(t => (
             <button
-              key={opt.value}
-              type="button"
-              onClick={() => setJobType(opt.value)}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border-2 text-sm transition-all ${
-                jobType === opt.value
-                  ? 'border-violet-500 bg-violet-50 text-violet-700 font-medium'
-                  : 'border-gray-200 text-gray-500 hover:border-gray-300'
+              key={t.id}
+              onClick={() => setReportType(t.id)}
+              className={`py-2.5 rounded-xl text-sm font-medium transition-all ${
+                reportType === t.id
+                  ? 'bg-white text-indigo-900 shadow-lg scale-[1.02]'
+                  : 'bg-white/10 text-white/70 hover:bg-white/20'
               }`}
             >
-              <span>{opt.emoji}</span>
-              <span className="truncate">{opt.label}</span>
+              <span className="mr-1">{t.icon}</span>{t.label}
             </button>
           ))}
         </div>
       </div>
 
-      {/* 今日工作内容 */}
+      {/* 岗位 */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">
-          今天做了什么
-          <span className="ml-1.5 text-xs text-gray-400 font-normal">口语化输入就行，AI来整理</span>
+        <label className="block text-white/60 text-xs font-medium mb-2 uppercase tracking-wide">你的岗位</label>
+        <div className="grid grid-cols-3 gap-2">
+          {roles.map(r => (
+            <button
+              key={r.id}
+              onClick={() => setRole(r.id)}
+              className={`py-2 px-3 rounded-xl text-sm transition-all ${
+                role === r.id
+                  ? 'bg-white text-indigo-900 font-medium shadow-lg scale-[1.02]'
+                  : 'bg-white/10 text-white/70 hover:bg-white/20'
+              }`}
+            >
+              <span className="mr-1">{r.icon}</span>{r.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 输入框 */}
+      <div>
+        <label className="block text-white/60 text-xs font-medium mb-2 uppercase tracking-wide">
+          内容描述 <span className="normal-case text-white/30 ml-1">口语化输入就行，AI 来整理</span>
         </label>
         <textarea
           value={content}
-          onChange={(e) => setContent(e.target.value)}
-          placeholder={PLACEHOLDERS[jobType]}
+          onChange={e => setContent(e.target.value)}
+          maxLength={1000}
           rows={5}
-          className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 text-sm text-gray-800 placeholder-gray-400
-            focus:outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100
-            resize-none transition-all leading-relaxed"
+          className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/25 resize-none focus:outline-none focus:border-white/50 focus:bg-white/15 transition-all text-sm leading-relaxed"
+          placeholder={placeholders[reportType]}
         />
-        <div className="flex justify-between mt-1">
-          <span className="text-xs text-gray-400">
-            {content.length < 10 && content.length > 0 ? '再多写几个字~' : ''}
-          </span>
-          <span className={`text-xs ${content.length > 800 ? 'text-orange-400' : 'text-gray-400'}`}>
-            {content.length} / 1000
-          </span>
-        </div>
+        <div className="text-right text-white/25 text-xs mt-1">{content.length} / 1000</div>
       </div>
 
-      {/* 日报风格 */}
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">日报风格</label>
-        <div className="grid grid-cols-3 gap-2">
-          {STYLE_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => setStyle(opt.value)}
-              className={`flex flex-col items-center px-2 py-3 rounded-xl border-2 text-sm transition-all ${
-                style === opt.value
-                  ? 'border-violet-500 bg-violet-50 text-violet-700'
-                  : 'border-gray-200 text-gray-500 hover:border-gray-300'
-              }`}
-            >
-              <span className="font-medium">{opt.label}</span>
-              <span className="text-xs mt-0.5 opacity-70">{opt.desc}</span>
-            </button>
-          ))}
+      {/* 风格（仅日报/周报/月报显示） */}
+      {showStyle && (
+        <div>
+          <label className="block text-white/60 text-xs font-medium mb-2 uppercase tracking-wide">报告风格</label>
+          <div className="grid grid-cols-3 gap-2">
+            {styles.map(s => (
+              <button
+                key={s.id}
+                onClick={() => setStyle(s.id)}
+                className={`py-3 px-2 rounded-xl text-center transition-all ${
+                  style === s.id
+                    ? 'bg-white text-indigo-900 shadow-lg scale-[1.02]'
+                    : 'bg-white/10 text-white/70 hover:bg-white/20'
+                }`}
+              >
+                <div className="font-medium text-sm">{s.label}</div>
+                <div className={`text-xs mt-0.5 ${style === s.id ? 'text-indigo-500' : 'text-white/35'}`}>
+                  {s.desc}
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* 提交按钮 */}
-      <div className="pt-1">
-        {!isPro && (
-          <p className="text-center text-xs text-gray-400 mb-3">
-            今日剩余免费次数：
-            <span className={`font-semibold ${remainingCount === 0 ? 'text-red-400' : 'text-violet-500'}`}>
-              {remainingCount}
-            </span>
-            &nbsp;/ 3 次
-          </p>
-        )}
-
-        <button
-          type="submit"
-          disabled={!canSubmit}
-          className={`w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl font-semibold text-base transition-all ${
-            canSubmit
-              ? 'gradient-bg text-white shadow-lg shadow-violet-200 hover:shadow-violet-300 hover:scale-[1.01] active:scale-[0.99]'
-              : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-          }`}
-        >
-          {isLoading ? (
-            <>
-              <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-              </svg>
-              <span>AI 生成中…</span>
-            </>
-          ) : (
-            <>
-              <Sparkles className="w-5 h-5" />
-              <span>一键生成{reportType === 'weekly' ? '周报' : '日报'}</span>
-            </>
-          )}
-        </button>
-
-        {!isPro && remainingCount === 0 && (
-          <p className="text-center text-xs text-red-400 mt-2">
-            今日免费次数已用完，明天再来 或 升级 Pro 无限使用 ✨
-          </p>
+      {/* 剩余次数 */}
+      <div className="flex items-center justify-between">
+        <span className="text-white/35 text-xs">
+          今日剩余：
+          <span className={remaining <= 1 ? 'text-rose-400 font-semibold' : 'text-white/60'}>
+            {remaining}
+          </span>
+          {' '}/ {FREE_LIMIT} 次
+        </span>
+        {remaining <= 1 && (
+          <span className="text-xs text-amber-400/80">⚠️ 次数即将用完</span>
         )}
       </div>
 
-    </form>
+      {/* 生成按钮 */}
+      <button
+        onClick={handleGenerate}
+        disabled={isGenerating || !content.trim()}
+        className={`w-full py-4 rounded-2xl font-semibold text-base transition-all ${
+          isGenerating || !content.trim()
+            ? 'bg-white/15 text-white/30 cursor-not-allowed'
+            : 'bg-gradient-to-r from-violet-500 to-blue-500 text-white hover:from-violet-400 hover:to-blue-400 shadow-lg hover:shadow-violet-500/25 hover:scale-[1.02] active:scale-[0.98]'
+        }`}
+      >
+        {isGenerating
+          ? <span className="flex items-center justify-center gap-2"><span className="animate-spin inline-block">⏳</span> AI 生成中...</span>
+          : `⚡ 生成${typeMap[reportType]}`
+        }
+      </button>
+    </div>
   )
 }

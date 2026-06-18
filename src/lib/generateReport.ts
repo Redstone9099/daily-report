@@ -1,127 +1,138 @@
-import OpenAI from 'openai'
-
-export type JobType = 'dev' | 'ops' | 'sales' | 'design' | 'management' | 'other'
+export type ReportType = 'daily' | 'weekly' | 'monthly' | 'review' | 'leave' | 'email'
+export type JobRole = 'dev' | 'ops' | 'sales' | 'design' | 'pm' | 'other'
 export type ReportStyle = 'simple' | 'formal' | 'kpi'
-export type ReportType = 'daily' | 'weekly'
 
-export interface GenerateOptions {
+interface GenerateParams {
+  role: JobRole
   content: string
-  jobType: JobType
   style: ReportStyle
   reportType: ReportType
-  userName?: string
 }
 
-export interface GenerateResult {
-  report: string
-  tokensUsed?: number
-}
-
-const JOB_TYPE_LABELS: Record<JobType, string> = {
+export const roleMap: Record<JobRole, string> = {
   dev: '研发/工程师',
   ops: '运营',
   sales: '销售',
   design: '设计师',
-  management: '管理/PM',
-  other: '其他职位',
+  pm: '管理/PM',
+  other: '其他岗位',
 }
 
-const STYLE_LABELS: Record<ReportStyle, string> = {
-  simple: '简洁版',
-  formal: '正式版',
-  kpi: 'KPI导向版',
+export const typeMap: Record<ReportType, string> = {
+  daily: '工作日报',
+  weekly: '工作周报',
+  monthly: '工作月报',
+  review: '述职报告',
+  leave: '请假条',
+  email: '工作邮件',
 }
 
-function buildDailyPrompt(options: GenerateOptions): string {
-  const { content, jobType, style, userName } = options
-  const jobLabel = JOB_TYPE_LABELS[jobType]
-  const styleLabel = STYLE_LABELS[style]
-
-  const styleGuide = {
-    simple: `
-- 格式简洁，使用"【今日工作】""【明日计划】"两个模块
-- 每项工作一行，用序号或短横线列举
-- 语言精炼，不超过200字`,
-    formal: `
-- 格式正式，使用"一、今日工作内容""二、工作完成情况""三、明日工作计划""四、需要协调/风险"四个模块
-- 措辞专业规范，体现工作量和质量
-- 适当体现工作成果和数据`,
-    kpi: `
-- 格式以KPI和结果为导向，突出数据和完成率
-- 使用"【目标完成情况】""【今日产出】""【明日重点】""【风险/阻塞】"四个模块
-- 每项工作都要量化，如：完成XX任务（进度100%）、提升XX指标XX%
-- 语言积极正向，体现个人价值`,
-  }[style]
-
-  return `你是一个专业的职场写作助手，专门帮助${jobLabel}快速生成规范的工作日报。
-
-用户原始输入（可能是碎片化的、口语化的工作记录）：
-${content}
-
-请根据以上内容，生成一份${styleLabel}的工作日报。
-
-格式要求：${styleGuide}
-
-其他要求：
-- 将碎片化内容整理成条理清晰的日报
-- 如果用户提到了具体数字/数据，保留并适当强调
-- 语气专业但不僵硬
-- 如果输入内容明显不足，可以合理补充通用性内容，但不要编造具体数字
-- 直接输出日报内容，不要加任何前言和解释
-${userName ? `- 日报末尾署名：${userName}` : '- 不需要署名'}
-- 日期用"今日"代替，不要填写具体日期`
+const styleMap: Record<ReportStyle, string> = {
+  simple: '简洁版（包含：今日完成、明日计划 两个模块）',
+  formal: '正式版（包含：今日完成、遇到问题、解决方案、明日计划 四个模块）',
+  kpi: 'KPI导向版（数据量化，突出成果，适合汇报给领导）',
 }
 
-function buildWeeklyPrompt(options: GenerateOptions): string {
-  const { content, jobType, userName } = options
-  const jobLabel = JOB_TYPE_LABELS[jobType]
+function buildPrompt({ role, content, style, reportType }: GenerateParams): string {
+  const roleName = roleMap[role]
+  const typeName = typeMap[reportType]
 
-  return `你是一个专业的职场写作助手，专门帮助${jobLabel}快速生成规范的工作周报。
+  if (reportType === 'leave') {
+    return `你是一个职场写作助手。请根据以下信息生成一份正式的请假条：
+请假原因/情况（口语化）：${content}
+要求：语言正式礼貌，格式规范，包含：称呼、请假原因、请假时间、工作交接说明、结尾敬语。
+直接输出请假条内容，不要任何前缀说明：`
+  }
 
-本周工作记录：
-${content}
+  if (reportType === 'email') {
+    return `你是一个职场写作助手。请根据以下信息生成一封专业的工作邮件：
+岗位：${roleName}
+邮件内容/情况（口语化）：${content}
+要求：格式规范（主题行、称呼、正文、结尾署名），语言专业，逻辑清晰。
+直接输出邮件内容，不要任何前缀说明：`
+  }
 
-请根据以上内容，生成一份专业的工作周报。
+  if (reportType === 'review') {
+    return `你是一个职场写作助手。请根据以下信息生成一份述职报告：
+岗位：${roleName}
+工作情况（口语化）：${content}
+要求：包含 工作概述、主要成果、遇到的挑战与解决方案、能力成长、下阶段规划 五个模块，语言专业正式，突出亮点和数据。
+直接输出述职报告内容，不要任何前缀说明：`
+  }
 
-格式要求：
-- 使用"【本周工作总结】""【重要成果与亮点】""【下周工作计划】""【需要支持/风险提示】"四个模块
-- 本周总结要归纳提炼，不要逐条罗列每天的工作
-- 突出重要成果，体现个人贡献
-- 下周计划要具体可执行
-- 语言专业，体现全局视角
-
-其他要求：
-- 直接输出周报内容，不要加任何前言和解释
-${userName ? `- 周报末尾署名：${userName}` : ''}
-- 时间范围用"本周"代替，不要填写具体日期`
+  return `你是一个专业的职场写作助手。请根据以下信息生成一份${typeName}：
+岗位：${roleName}
+风格：${styleMap[style]}
+工作内容（口语化）：${content}
+要求：
+1. 将口语化内容转化为规范职场用语
+2. 按照指定风格的模块格式输出
+3. 语言简洁专业，避免废话
+4. 内容不够具体时可适当补充合理细节
+5. 直接输出${typeName}内容，不需要任何前缀说明
+请直接生成${typeName}：`
 }
 
-export async function generateReport(
-  options: GenerateOptions,
-  apiKey: string,
-  baseURL?: string,
-): Promise<GenerateResult> {
-  const client = new OpenAI({
-    apiKey,
-    baseURL: baseURL || 'https://api.openai.com/v1',
-    dangerouslyAllowBrowser: true,
+const API_URL = 'https://api.kourichat.com/v1/chat/completions'
+const API_KEY = 'sk-kouri-uPX43GrxM3amEiKaftVS8VFSv3XJk0XAUnTcAcTwtlBR2mjt'
+
+export async function generateReportStream(
+  params: GenerateParams,
+  onChunk: (chunk: string) => void
+): Promise<void> {
+  const prompt = buildPrompt(params)
+
+  const response = await fetch(API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-5',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 1500,
+      temperature: 0.7,
+      stream: true,
+    }),
   })
 
-  const prompt = options.reportType === 'weekly'
-    ? buildWeeklyPrompt(options)
-    : buildDailyPrompt(options)
+  if (!response.ok) {
+    throw new Error(`API 请求失败: ${response.status}`)
+  }
 
-  const response = await client.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [
-      { role: 'user', content: prompt },
-    ],
-    temperature: 0.7,
-    max_tokens: 1000,
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error('无法读取响应流')
+
+  const decoder = new TextDecoder()
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    const chunk = decoder.decode(value, { stream: true })
+    const lines = chunk.split('\n')
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed === 'data: [DONE]') continue
+      if (!trimmed.startsWith('data: ')) continue
+
+      try {
+        const json = JSON.parse(trimmed.slice(6))
+        const delta = json.choices?.[0]?.delta?.content
+        if (delta) onChunk(delta)
+      } catch {
+        // 跳过解析失败的行
+      }
+    }
+  }
+}
+
+export async function generateReport(params: GenerateParams): Promise<string> {
+  let result = ''
+  await generateReportStream(params, chunk => {
+    result += chunk
   })
-
-  const report = response.choices[0]?.message?.content ?? ''
-  const tokensUsed = response.usage?.total_tokens
-
-  return { report, tokensUsed }
+  return result
 }

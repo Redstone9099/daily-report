@@ -1,193 +1,113 @@
-import { useState, useCallback } from 'react'
-import { FileText, Clock, Settings, Zap } from 'lucide-react'
-import { ReportForm } from './components/ReportForm'
-import { ReportOutput } from './components/ReportOutput'
-import { HistoryPanel } from './components/HistoryPanel'
-import { SettingsPanel } from './components/SettingsPanel'
-import { generateReport } from './lib/generateReport'
-import type { JobType, ReportStyle, ReportType } from './lib/generateReport'
-import {
-  getSettings, saveSettings,
-  getHistory, saveHistory, deleteHistory, clearHistory,
-  canGenerate, remainingCount, incrementUsage,
-} from './lib/storage'
-import type { HistoryRecord, UserSettings } from './lib/storage'
+import { useState, useEffect } from 'react'
+import ReportForm from './components/ReportForm'
+import ReportOutput from './components/ReportOutput'
+import HistoryPanel from './components/HistoryPanel'
+import { getHistory, type ReportRecord } from './lib/storage'
+import './App.css'
 
-type Tab = 'generate' | 'history' | 'settings'
+type Tab = 'generate' | 'history'
 
-const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: 'generate', label: '生成', icon: <Zap className="w-4 h-4" /> },
-  { id: 'history', label: '历史', icon: <Clock className="w-4 h-4" /> },
-  { id: 'settings', label: '设置', icon: <Settings className="w-4 h-4" /> },
-]
+function App() {
+  const [activeTab, setActiveTab] = useState<Tab>('generate')
+  const [currentReport, setCurrentReport] = useState<string>('')
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [history, setHistory] = useState<ReportRecord[]>([])
 
-export default function App() {
-  const [tab, setTab] = useState<Tab>('generate')
-  const [settings, setSettings] = useState<UserSettings>(getSettings)
-  const [history, setHistory] = useState<HistoryRecord[]>(getHistory)
-
-  const [isLoading, setIsLoading] = useState(false)
-  const [report, setReport] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [reuseKey, setReuseKey] = useState(0)
-
-  const refreshHistory = useCallback(() => {
+  useEffect(() => {
     setHistory(getHistory())
   }, [])
 
-  async function handleGenerate(data: {
-    content: string
-    jobType: JobType
-    style: ReportStyle
-    reportType: ReportType
-  }) {
-    if (!settings.apiKey) {
-      setError('请先在「设置」页填写 API Key')
-      setTab('settings')
-      return
-    }
-
-    if (!canGenerate(settings.isPro)) {
-      setError('今日免费次数已用完，明天再来或升级 Pro ✨')
-      return
-    }
-
-    setError(null)
-    setIsLoading(true)
-    setReport(null)
-
-    try {
-      const result = await generateReport(
-        { ...data, userName: settings.userName || undefined },
-        settings.apiKey,
-        settings.baseURL || undefined,
-      )
-
-      setReport(result.report)
-      incrementUsage()
-
-      saveHistory({
-        reportType: data.reportType,
-        jobType: data.jobType,
-        style: data.style,
-        inputContent: data.content,
-        outputReport: result.report,
-      })
-      refreshHistory()
-
-      saveSettings(settings)
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (msg.includes('401') || msg.includes('Unauthorized')) {
-        setError('API Key 无效，请检查设置')
-      } else if (msg.includes('429')) {
-        setError('请求太频繁，请稍后再试')
-      } else if (msg.includes('network') || msg.includes('fetch')) {
-        setError('网络错误，请检查网络连接或 API 地址')
-      } else {
-        setError(`生成失败：${msg}`)
-      }
-    } finally {
-      setIsLoading(false)
-    }
+  const handleStreamChunk = (chunk: string) => {
+    setCurrentReport(prev => prev + chunk)
   }
 
-  function handleReset() {
-    setReport(null)
-    setError(null)
+  const handleStreamDone = (fullReport: string) => {
+    setCurrentReport(fullReport)
+    setHistory(getHistory())
   }
 
-  function handleReuse(record: HistoryRecord) {
-    setTab('generate')
-    setReuseKey((k) => k + 1)
-    sessionStorage.setItem('drg_reuse', JSON.stringify({
-      content: record.inputContent,
-      jobType: record.jobType,
-      style: record.style,
-      reportType: record.reportType,
-    }))
+  const handleTabChange = (tab: Tab) => {
+    setActiveTab(tab)
+    if (tab === 'generate') {
+      setCurrentReport('')
+    }
   }
 
   return (
-    <div className="min-h-screen gradient-bg flex items-start justify-center py-8 px-4">
-      <div className="w-full max-w-4xl">
+    <div className="min-h-screen bg-gradient-to-br from-indigo-950 via-purple-950 to-slate-900">
+      {/* 背景光晕 */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-40 -left-40 w-96 h-96 bg-violet-600/20 rounded-full blur-3xl" />
+        <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-blue-600/20 rounded-full blur-3xl" />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-indigo-600/10 rounded-full blur-3xl" />
+      </div>
 
-        {/* Header */}
-        <div className="text-center mb-6">
-          <div className="inline-flex items-center justify-center w-14 h-14 bg-white/20 rounded-2xl mb-3 shadow-lg">
-            <FileText className="w-7 h-7 text-white" />
-          </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">工作日报生成器</h1>
-          <p className="text-white/70 text-sm mt-1">口语化输入 → AI 秒出规范日报 / 周报</p>
+      {/* Header */}
+      <div className="relative text-center pt-10 pb-6 px-4">
+        <div className="inline-flex items-center justify-center w-14 h-14 bg-white/10 rounded-2xl mb-4 backdrop-blur-sm border border-white/20 shadow-lg">
+          <span className="text-2xl">📋</span>
         </div>
+        <h1 className="text-3xl font-bold text-white mb-1.5 tracking-tight">工作日报生成器</h1>
+        <p className="text-blue-300/70 text-sm">口语化输入 → AI 秒出规范文档</p>
+      </div>
 
-        {/* 主卡片 */}
-        <div className="glass-card rounded-3xl shadow-2xl shadow-violet-900/20 overflow-hidden">
-
-          {/* Tab 导航 */}
-          <div className="flex border-b border-gray-100">
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-4 text-sm font-medium transition-all ${
-                  tab === t.id
-                    ? 'text-violet-600 border-b-2 border-violet-500'
-                    : 'text-gray-400 hover:text-gray-600'
-                }`}
-              >
-                {t.icon}
-                {t.label}
-              </button>
-            ))}
+      {/* Main Card */}
+      <div className="relative max-w-2xl mx-auto px-4 pb-12">
+        <div className="bg-white/8 backdrop-blur-xl rounded-3xl border border-white/15 shadow-2xl overflow-hidden">
+          {/* Tab Bar */}
+          <div className="flex border-b border-white/10 bg-white/5">
+            <button
+              onClick={() => handleTabChange('generate')}
+              className={`flex-1 py-4 text-sm font-medium transition-all ${
+                activeTab === 'generate'
+                  ? 'text-white border-b-2 border-violet-400 bg-white/5'
+                  : 'text-white/40 hover:text-white/70'
+              }`}
+            >
+              ⚡ 生成文档
+            </button>
+            <button
+              onClick={() => handleTabChange('history')}
+              className={`flex-1 py-4 text-sm font-medium transition-all ${
+                activeTab === 'history'
+                  ? 'text-white border-b-2 border-violet-400 bg-white/5'
+                  : 'text-white/40 hover:text-white/70'
+              }`}
+            >
+              🕐 历史记录
+            </button>
           </div>
 
-          {/* Tab 内容 */}
+          {/* Tab Content */}
           <div className="p-6">
-            {tab === 'generate' && (
-              <div>
-                {error && (
-                  <div className="mb-4 px-4 py-3 bg-red-50 border border-red-100 rounded-xl text-sm text-red-600">
-                    {error}
-                  </div>
-                )}
-                {report ? (
-                  <ReportOutput report={report} onReset={handleReset} />
-                ) : (
-                  <ReportForm
-                    key={reuseKey}
-                    onGenerate={handleGenerate}
-                    isLoading={isLoading}
-                    remainingCount={remainingCount(settings.isPro)}
-                    isPro={settings.isPro}
+            {activeTab === 'generate' && (
+              <div className="space-y-5">
+                <ReportForm
+                  onStreamChunk={handleStreamChunk}
+                  onStreamDone={handleStreamDone}
+                  isGenerating={isGenerating}
+                  setIsGenerating={setIsGenerating}
+                />
+                {(currentReport || isGenerating) && (
+                  <ReportOutput
+                    report={currentReport}
+                    isGenerating={isGenerating}
                   />
                 )}
               </div>
             )}
-
-            {tab === 'history' && (
-              <HistoryPanel
-                history={history}
-                onDelete={(id) => { deleteHistory(id); refreshHistory() }}
-                onClearAll={() => { clearHistory(); refreshHistory() }}
-                onReuse={handleReuse}
-              />
-            )}
-
-            {tab === 'settings' && (
-              <SettingsPanel
-                settings={settings}
-                onSave={(partial) => setSettings((prev) => ({ ...prev, ...partial }))}
-              />
+            {activeTab === 'history' && (
+              <HistoryPanel history={history} />
             )}
           </div>
         </div>
 
-        {/* Footer */}
-        <p className="text-center text-white/40 text-xs mt-6">
-          数据仅存储在本地浏览器 · 不收集任何个人信息
+        <p className="text-center text-white/20 text-xs mt-6">
+          数据仅存储在本地浏览器 · 不上传任何内容
         </p>
       </div>
     </div>
   )
 }
+
+export default App
